@@ -100,7 +100,7 @@ class LOGISTIC_REGRESSION(object):
                 thetas
             except NameError:
                 thetas = np.zeros((X.shape[1], 1))
-            thetas = self.fit(X, y, thetas)
+            thetas = self.fit(X, y, thetas) * lr
             if show_plt and i % 10 == 0:
                 plt.pause(0.1)
                 try:
