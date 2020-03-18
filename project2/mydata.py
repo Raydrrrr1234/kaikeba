@@ -227,7 +227,7 @@ class RandomErasing(object):
 
         if random.uniform(0, 1) < self.p:
             x, y, h, w, v = self.get_params(image, scale=self.scale, ratio=self.ratio, value=self.value)
-            return F.erase(image, x, y, h, w, v, self.inplace)
+            image = F.erase(image, x, y, h, w, v, self.inplace)
         return {'image': image,
                 'landmarks': landmarks,
                 'net': net}
@@ -279,6 +279,9 @@ class FaceLandmarksDataset(Dataset):
         ])
         sample = {'image': img_crop, 'landmarks': landmarks, 'net': self.net, 'angle': self.angle}
         sample = self.transform(sample)
+        if self.phase != 'train':
+            sample['path'] = img_name
+            sample['rect'] = rect
         return sample
 
 
