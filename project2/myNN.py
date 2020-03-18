@@ -214,6 +214,7 @@ class ResNet(nn.Module):
                                        dilate=replace_stride_with_dilation[2])
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
         self.fc = nn.Linear(512 * block.expansion, num_classes)
+        self.myfc = nn.Linear(num_classes, 42)
 
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
@@ -271,6 +272,7 @@ class ResNet(nn.Module):
         x = self.avgpool(x)
         x = torch.flatten(x, 1)
         x = self.fc(x)
+        x = self.myfc(x)
         return x
 
     def forward(self, x):
@@ -582,23 +584,23 @@ class GoogLeNet(nn.Module):
 
     @torch.jit.unused
     def eager_outputs(self, x, aux2, aux1):
-        # type: (Tensor, Optional[Tensor], Optional[Tensor]) -> Tensor
-        '''if self.training and self.aux_logits:
+        # type: (Tensor, Optional[Tensor], Optional[Tensor]) -> GoogLeNetOutputs
+        if self.training and self.aux_logits:
             return _GoogLeNetOutputs(x, aux2, aux1)
-        else:'''
-        return x * 0.4 + aux1 * 0.3 + aux2 * 0.3
+        else:
+            return x
 
     def forward(self, x):
-        # type: (Tensor) -> Tensor
+        # type: (Tensor) -> GoogLeNetOutputs
         x = self._transform_input(x)
         x, aux1, aux2 = self._forward(x)
         aux_defined = self.training and self.aux_logits
-        '''if torch.jit.is_scripting():
+        if torch.jit.is_scripting():
             if not aux_defined:
                 warnings.warn("Scripted GoogleNet always returns GoogleNetOutputs Tuple")
             return GoogLeNetOutputs(x, aux2, aux1)
-        else:'''
-        return self.eager_outputs(x, aux2, aux1)
+        else:
+            return self.eager_outputs(x, aux2, aux1)
 
 
 class Inception(nn.Module):

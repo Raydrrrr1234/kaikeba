@@ -2,11 +2,21 @@ import argparse
 import math
 import cv2
 import numpy as np
-import torch
 from PIL import Image
-from mydata import RandomFlip, RandomRotate
-from torchvision import transforms
+from mydata import RandomFlipLR, RandomRotate
 
+
+def rotate(origin, point, angle):
+    """
+    Rotate a point counterclockwise by a given angle around a given origin.
+    The angle should be given in radians.
+    """
+    ox, oy = origin
+    px, py = point
+
+    qx = ox + math.cos(angle) * (px - ox) - math.sin(angle) * (py - oy)
+    qy = oy + math.sin(angle) * (px - ox) + math.cos(angle) * (py - oy)
+    return qx, qy
 
 
 def main_test():
@@ -24,8 +34,8 @@ def main_test():
     kps = [cv2.KeyPoint(i, j, 1) for (i, j) in zip(sample['landmarks'][::2], sample['landmarks'][1::2])]
     cv2.drawKeypoints(img, kps, img, color=(0, 0, 255), flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
     cv2.imshow('Original', cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
-    '''cv2.waitKey(0)
-    rlr = RandomFlip()
+    cv2.waitKey(0)
+    rlr = RandomFlipLR()
     sample = rlr(sample)
     img = np.array(sample['image'])
     kps = [cv2.KeyPoint(i, j, 1) for (i, j) in zip(sample['landmarks'][::2], sample['landmarks'][1::2])]
@@ -38,16 +48,6 @@ def main_test():
     img = np.array(sample['image'])
     kps = [cv2.KeyPoint(i, j, 1) for (i, j) in zip(sample['landmarks'][::2], sample['landmarks'][1::2])]
     cv2.drawKeypoints(img, kps, img, color=(0, 0, 255), flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
-    cv2.imshow('RandomRotate', cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
-    print(img.shape)
-    cv2.waitKey(0)'''
-    rc = transforms.RandomErasing()
-    img = np.array(image)
-    img = img.transpose((2, 0, 1))
-    img = rc(torch.from_numpy(img))
-    kps = [cv2.KeyPoint(i, j, 1) for (i, j) in zip(sample['landmarks'][::2], sample['landmarks'][1::2])]
-    #cv2.drawKeypoints(img, kps, img, color=(0, 0, 255), flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
-    img = np.array(img).transpose((1, 2, 0))
     cv2.imshow('RandomRotate', cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
     print(img.shape)
     cv2.waitKey(0)

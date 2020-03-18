@@ -122,7 +122,7 @@ def main_test():
                         help='disables CUDA training')
     parser.add_argument('--seed', type=int, default=1, metavar='S',
                         help='random seed (default: 1)')
-    parser.add_argument('--log-interval', type=int, default=64, metavar='N',
+    parser.add_argument('--log-interval', type=int, default=20, metavar='N',
                         help='how many batches to wait before logging training status')
     parser.add_argument('--save-model', action='store_true', default=True,
                         help='save the current Model')
@@ -156,32 +156,17 @@ def main_test():
 
     print('===> Building Model')
     # For single GPU
-    if args.net == 'ResNet18' or args.net == 'resnet18':
-        model = resnet18()
-        in_features = model.fc.in_features
-        model.fc = nn.Linear(in_features, 42)
-        model = model.to(device)
-    elif args.net == 'ResNet34' or args.net == 'resnet34':
-        model = resnet34()
-        in_features = model.fc.in_features
-        model.fc = nn.Linear(in_features, 42)
-        model = model.to(device)
-    elif args.net == 'ResNet50' or args.net == 'resnet50':
-        model = resnet50()
-        in_features = model.fc.in_features
-        model.fc = nn.Linear(in_features, 42)
-        model = model.to(device)
-    elif args.net == 'ResNet101' or args.net == 'resnet101':
-        model = resnet101()
-        in_features = model.fc.in_features
-        model.fc = nn.Linear(in_features, 42)
-        model = model.to(device)
-    elif args.net == 'ResNet152' or args.net == 'resnet152':
-        model = resnet152()
-        in_features = model.fc.in_features
-        model.fc = nn.Linear(in_features, 42)
-        model = model.to(device)
-    elif args.net == 'GoogLeNet' or args.net == 'googlenet':
+    if args.net== 'ResNet18' or args.net == 'resnet18':
+        model = resnet18().to(device)
+    elif args.net== 'ResNet34' or args.net == 'resnet34':
+        model = resnet34().to(device)
+    elif args.net== 'ResNet50' or args.net == 'resnet50':
+        model = resnet50().to(device)
+    elif args.net== 'ResNet101' or args.net == 'resnet101':
+        model = resnet101().to(device)
+    elif args.net== 'ResNet152' or args.net == 'resnet152':
+        model = resnet152().to(device)
+    elif args.net== 'GoogLeNet' or args.net == 'googlenet':
         model = GoogLeNet(num_classes=args.num_class).to(device)
     else:
         model = Net().to(device)
@@ -190,7 +175,7 @@ def main_test():
     if args.alg == 'SGD':
         optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
     elif args.alg == 'adam' or args.alg == 'Adam':
-        optimizer = optim.Adam(model.parameters(), lr=args.lr, momentum=args.momentum)
+        optimizer = optim.Adam([0.9, 0.999], lr=args.lr)
     ####################################################################
     if args.phase == 'Train' or args.phase == 'train':
         print('===> Start Training')
@@ -208,7 +193,6 @@ def main_test():
     elif args.phase == 'Predict' or args.phase == 'predict':
         print('===> Predict')
         predict(args, args.save_directory, model, valid_loader)
-    return train_losses, valid_losses
 
 if __name__ == '__main__':
     main_test()
