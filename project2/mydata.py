@@ -1,4 +1,6 @@
 import random
+import warnings
+
 from torch.utils.data import Dataset
 import torch
 from PIL import Image
@@ -6,6 +8,7 @@ import cv2
 import math
 import numpy as np
 from torchvision import transforms
+import torchvision.transforms.functional as F
 
 path = 'data'
 folder_list = ['I', 'II']
@@ -124,6 +127,7 @@ class ToTensor(object):
         Convert ndarrays in sample to Tensors.
         Tensors channel sequence: N x C x H x W
     """
+
     def __call__(self, sample):
         image, landmarks, net = sample['image'], sample['landmarks'], sample['net']
         # swap color axis because
@@ -136,6 +140,98 @@ class ToTensor(object):
         return {'image': torch.from_numpy(image),
                 'landmarks': torch.from_numpy(landmarks),
                 'net': net}
+
+
+class RandomErasing(object):
+    """ Randomly selects a rectangle region in an image and erases its pixels.
+        'Random Erasing Data Augmentation' by Zhong et al.
+        See https://arxiv.org/pdf/1708.04896.pdf
+    Args:
+         p: probability that the random erasing operation will be performed.
+         scale: range of proportion of erased area against input image.
+         ratio: range of aspect ratio of erased area.
+         value: erasing value. Default is 0. If a single int, it is used to
+            erase all pixels. If a tuple of length 3, it is used to erase
+            R, G, B channels respectively.
+            If a str of 'random', erasing each pixel with random values.
+         inplace: boolean to make this transform inplace. Default set to False.
+
+    Returns:
+        Erased Image.
+    # Examples:
+        >>> transform = transforms.Compose([
+        >>> transforms.RandomHorizontalFlip(),
+        >>> transforms.ToTensor(),
+        >>> transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
+        >>> transforms.RandomErasing(),
+        >>> ])
+    """
+
+    def __init__(self, p=0.5, scale=(0.02, 0.33), ratio=(0.3, 3.3), value=0, inplace=False):
+
+        if (scale[0] > scale[1]) or (ratio[0] > ratio[1]):
+            warnings.warn("range should be of kind (min, max)")
+        if scale[0] < 0 or scale[1] > 1:
+            raise ValueError("range of scale should be between 0 and 1")
+        if p < 0 or p > 1:
+            raise ValueError("range of random erasing probability should be between 0 and 1")
+
+        self.p = p
+        self.scale = scale
+        self.ratio = ratio
+        self.value = value
+        self.inplace = inplace
+
+    @staticmethod
+    def get_params(img, scale, ratio, value=0):
+        """Get parameters for ``erase`` for a random erasing.
+
+        Args:
+            img (Tensor): Tensor image of size (C, H, W) to be erased.
+            scale: range of proportion of erased area against input image.
+            ratio: range of aspect ratio of erased area.
+            value: default value to fill
+        Returns:
+            tuple: params (i, j, h, w, v) to be passed to ``erase`` for random erasing.
+        """
+        img_c, img_h, img_w = img.shape
+        area = img_h * img_w
+
+        for attempt in range(10):
+            erase_area = random.uniform(scale[0], scale[1]) * area
+            aspect_ratio = random.uniform(ratio[0], ratio[1])
+
+            h = int(round(math.sqrt(erase_area * aspect_ratio)))
+            w = int(round(math.sqrt(erase_area / aspect_ratio)))
+
+            if h < img_h and w < img_w:
+                i = random.randint(0, img_h - h)
+                j = random.randint(0, img_w - w)
+                v = value
+                return i, j, h, w, v
+
+        # Return original image
+        return 0, 0, img_h, img_w, img
+
+    def __call__(self, sample):
+        """
+        Args:
+            sample dict type
+            sample['image']: (Tensor): Tensor image of size (C, H, W) to be erased.
+            sample['landmarks']: flatten points information
+
+        Returns:
+            sample (Tensor): Erased Tensor image.
+        """
+        image, landmarks, net = sample['image'], sample['landmarks'], sample['net']
+
+        if random.uniform(0, 1) < self.p:
+            x, y, h, w, v = self.get_params(image, scale=self.scale, ratio=self.ratio, value=self.value)
+            return F.erase(image, x, y, h, w, v, self.inplace)
+        return {'image': image,
+                'landmarks': landmarks,
+                'net': net}
+
 
 
 def my_enlargement(img, rect, landmarks):
@@ -183,7 +279,6 @@ class FaceLandmarksDataset(Dataset):
         ])
         sample = {'image': img_crop, 'landmarks': landmarks, 'net': self.net, 'angle': self.angle}
         sample = self.transform(sample)
-
         return sample
 
 
@@ -196,12 +291,12 @@ def load_data(phase, net, roi, angle):
             RandomFlip(),
             RandomRotate(),
             Normalize(),  # do channel normalization
-            ToTensor()]  # convert to torch type: NxCxHxW
+            ToTensor(),   # convert to torch type: NxCxHxW
+            RandomErasing()
+        ]
         )
     else:
         tsfm = transforms.Compose([
-            RandomFlip(),
-            RandomRotate(),
             Normalize(),
             ToTensor()
         ])
