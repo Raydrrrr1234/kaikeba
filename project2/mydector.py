@@ -1,5 +1,6 @@
 import argparse
 import os
+import time
 
 from torch import nn
 import torch.optim as optim
@@ -10,7 +11,12 @@ from predict import predict, test
 
 import torch
 
-
+# imports the torch_xla package
+try:
+    import torch_xla
+    import torch_xla.core.xla_model as xm
+except ModuleNotFoundError:
+    print('No TPUs scheme')
 
 torch.set_default_tensor_type(torch.FloatTensor)
 
@@ -29,6 +35,8 @@ def train(args, train_loader, valid_loader, model, criterion, optimizer, device,
 
     train_losses = []
     valid_losses = []
+    time_elapse1 = []
+    time_elapse2 = []
 
     for epoch_id in range(1, epoch+1):
         # monitor training loss
@@ -38,6 +46,7 @@ def train(args, train_loader, valid_loader, model, criterion, optimizer, device,
         # training the model #
         ######################
         model.train()
+        start = time.perf_counter()
         for batch_idx, batch in enumerate(train_loader):
             img = batch['image']
             landmark = batch['landmarks']
@@ -70,17 +79,20 @@ def train(args, train_loader, valid_loader, model, criterion, optimizer, device,
                         loss.item()
                     )
                 )
-                train_losses.append(loss)
+                train_losses.append(loss.item())
 
         if scheduler:  # Finetune with learning rate scheduler
             scheduler.step()
-
+        elapsed = time.perf_counter() - start
+        print("Trained elapsed: %.5f" % elapsed)
+        time_elapse1.append(elapsed)
         ######################
         # validate the model #
         ######################
         valid_mean_pts_loss = 0.0
 
         model.eval()  # prep model for evaluation
+        start = time.perf_counter()
         with torch.no_grad():
             valid_batch_cnt = 0
 
@@ -104,12 +116,15 @@ def train(args, train_loader, valid_loader, model, criterion, optimizer, device,
                 )
             )
             valid_losses.append(valid_mean_pts_loss)
+        elapsed = time.perf_counter() - start
+        print("Evaluation elapsed: %.5f" % elapsed)
         print('====================================================')
+        time_elapse2.append(elapsed)
         # save model
         if args.save_model and epoch_id % args.save_interval == 0:
             saved_model_name = os.path.join(args.save_directory, 'detector_epoch' + '_' + str(epoch_id) + '.pt')
             torch.save(model.state_dict(), saved_model_name)
-    return train_losses, valid_losses
+    return train_losses, valid_losses, time_elapse1, time_elapse1
 
 
 def main_test():
@@ -126,6 +141,8 @@ def main_test():
                         help='Select optimzer SGD, adam, or other')
     parser.add_argument('--momentum', type=float, default=0.5, metavar='M',
                         help='momentum (default: 0.5)')
+    parser.add_argument('--use-tpu', action='store_true', default=False,
+                        help='enable cloud tpu training')
     parser.add_argument('--no-cuda', action='store_true', default=False,
                         help='disables CUDA training')
     parser.add_argument('--seed', type=int, default=1, metavar='S',
@@ -159,7 +176,11 @@ def main_test():
     ###################################################################################
     torch.manual_seed(args.seed)
     use_cuda = not args.no_cuda and torch.cuda.is_available()
-    device = torch.device("cuda" if use_cuda else "cpu")  # cuda:0
+    if args.use_tpu:
+        device = xm.xla_device()
+        device2 = xm.xla_device(n=2, devkind='TPU')
+    else:
+        device = torch.device("cuda" if use_cuda else "cpu")  # cuda:0
     # For multi GPUs, nothing need to change here
     kwargs = {'num_workers': 1, 'pin_memory': True} if use_cuda else {}
 
@@ -169,36 +190,43 @@ def main_test():
     valid_loader = torch.utils.data.DataLoader(test_set, batch_size=args.test_batch_size)
     ####################################################################
     print('===> Building Model')
-    # For single GPU
-    if args.net == 'ResNet18' or args.net == 'resnet18':
-        model = resnet18()
-        in_features = model.fc.in_features
-        model.fc = nn.Linear(in_features, 42)
-        model = model.to(device)
-    elif args.net == 'ResNet34' or args.net == 'resnet34':
-        model = resnet34()
-        in_features = model.fc.in_features
-        model.fc = nn.Linear(in_features, 42)
-        model = model.to(device)
-    elif args.net == 'ResNet50' or args.net == 'resnet50':
-        model = resnet50()
-        in_features = model.fc.in_features
-        model.fc = nn.Linear(in_features, 42)
-        model = model.to(device)
-    elif args.net == 'ResNet101' or args.net == 'resnet101':
+    if args.use_tpu:
+        # TPU is only an experiment on ResNet101
         model = resnet101()
         in_features = model.fc.in_features
         model.fc = nn.Linear(in_features, 42)
         model = model.to(device)
-    elif args.net == 'ResNet152' or args.net == 'resnet152':
-        model = resnet152()
-        in_features = model.fc.in_features
-        model.fc = nn.Linear(in_features, 42)
-        model = model.to(device)
-    elif args.net == 'GoogLeNet' or args.net == 'googlenet':
-        model = GoogLeNet(num_classes=args.num_class).to(device)
     else:
-        model = Net().to(device)
+        # For single GPU
+        if args.net == 'ResNet18' or args.net == 'resnet18':
+            model = resnet18()
+            in_features = model.fc.in_features
+            model.fc = nn.Linear(in_features, 42)
+            model = model.to(device)
+        elif args.net == 'ResNet34' or args.net == 'resnet34':
+            model = resnet34()
+            in_features = model.fc.in_features
+            model.fc = nn.Linear(in_features, 42)
+            model = model.to(device)
+        elif args.net == 'ResNet50' or args.net == 'resnet50':
+            model = resnet50()
+            in_features = model.fc.in_features
+            model.fc = nn.Linear(in_features, 42)
+            model = model.to(device)
+        elif args.net == 'ResNet101' or args.net == 'resnet101':
+            model = resnet101()
+            in_features = model.fc.in_features
+            model.fc = nn.Linear(in_features, 42)
+            model = model.to(device)
+        elif args.net == 'ResNet152' or args.net == 'resnet152':
+            model = resnet152()
+            in_features = model.fc.in_features
+            model.fc = nn.Linear(in_features, 42)
+            model = model.to(device)
+        elif args.net == 'GoogLeNet' or args.net == 'googlenet':
+            model = GoogLeNet(num_classes=args.num_class).to(device)
+        else:
+            model = Net().to(device)
     ####################################################################
     if args.loss == 'L2':
         criterion_pts = nn.MSELoss()
@@ -216,10 +244,10 @@ def main_test():
     ####################################################################
     if args.phase == 'Train' or args.phase == 'train':
         print('===> Start Training')
-        train_losses, valid_losses = \
+        train_losses, valid_losses, time_elapse1, time_elapse2 = \
             train(args, train_loader, valid_loader, model, criterion_pts, optimizer, device)
         print('====================================================')
-        return train_losses, valid_losses
+
     elif args.phase == 'Test' or args.phase == 'test':
         print('===> Test')
         test(args, model, valid_loader, output_file='output.txt')
@@ -230,15 +258,18 @@ def main_test():
             scheduler = None
         elif args.scheduler == 'StepLR100':
             scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=25)
-        train_losses, valid_losses = \
+        train_losses, valid_losses, time_elapse1, time_elapse2 = \
             train(args, train_loader, valid_loader, model, criterion_pts, optimizer, device, scheduler=scheduler)
         print('====================================================')
-        return train_losses, valid_losses
     elif args.phase == 'Predict' or args.phase == 'predict':
         print('===> Predict')
         predict(args, model, valid_loader)
         print('====================================================')
-
+    with open(args.save_directory+'train_result.txt', 'w+') as f:
+        f.write(' '.join(train_losses)+'\n')
+        f.write(' '.join(valid_losses)+'\n')
+        f.write(' '.join(time_elapse1)+'\n')
+        f.write(' '.join(time_elapse2)+'\n')
 
 if __name__ == '__main__':
     print(main_test())
