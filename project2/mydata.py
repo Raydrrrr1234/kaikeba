@@ -8,7 +8,7 @@ import cv2
 import math
 import numpy as np
 from torchvision import transforms
-import torchvision.transforms.functional as F
+
 
 path = 'data'
 folder_list = ['I', 'II']
@@ -19,6 +19,31 @@ need_record = False
 
 train_list = 'train.txt'
 test_list = 'test.txt'
+
+
+def erase(img, i, j, h, w, v, inplace=False):
+    """ Erase the input Tensor Image with given value.
+
+    Args:
+        img (Tensor Image): Tensor image of size (C, H, W) to be erased
+        i (int): i in (i,j) i.e coordinates of the upper left corner.
+        j (int): j in (i,j) i.e coordinates of the upper left corner.
+        h (int): Height of the erased region.
+        w (int): Width of the erased region.
+        v: Erasing value.
+        inplace(bool, optional): For in-place operations. By default is set False.
+
+    Returns:
+        Tensor Image: Erased image.
+    """
+    if not isinstance(img, torch.Tensor):
+        raise TypeError('img should be Tensor Image. Got {}'.format(type(img)))
+
+    if not inplace:
+        img = img.clone()
+
+    img[:, i:i + h, j:j + w] = v
+    return img
 
 
 def channel_norm(img):
@@ -227,7 +252,7 @@ class RandomErasing(object):
 
         if random.uniform(0, 1) < self.p:
             x, y, h, w, v = self.get_params(image, scale=self.scale, ratio=self.ratio, value=self.value)
-            image = F.erase(image, x, y, h, w, v, self.inplace)
+            image = erase(image, x, y, h, w, v, self.inplace)
         return {'image': image,
                 'landmarks': landmarks,
                 'net': net}

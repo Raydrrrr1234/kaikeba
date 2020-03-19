@@ -7,8 +7,11 @@ import torch.optim as optim
 from mydata import get_train_test_set
 from myNN import Net, resnet18, resnet34, resnet50, resnet101, resnet152, GoogLeNet
 from predict import predict, test
-from fpn import FPN101
+
 import torch
+
+
+
 torch.set_default_tensor_type(torch.FloatTensor)
 
 
@@ -27,7 +30,7 @@ def train(args, train_loader, valid_loader, model, criterion, optimizer, device,
     train_losses = []
     valid_losses = []
 
-    for epoch_id in range(epoch):
+    for epoch_id in range(1, epoch+1):
         # monitor training loss
         train_loss = 0.0
         valid_loss = 0.0
@@ -103,7 +106,7 @@ def train(args, train_loader, valid_loader, model, criterion, optimizer, device,
             valid_losses.append(valid_mean_pts_loss)
         print('====================================================')
         # save model
-        if args.save_model and epoch_id % 30 == 0:
+        if args.save_model and epoch_id % args.save_interval == 0:
             saved_model_name = os.path.join(args.save_directory, 'detector_epoch' + '_' + str(epoch_id) + '.pt')
             torch.save(model.state_dict(), saved_model_name)
     return train_losses, valid_losses
@@ -129,6 +132,8 @@ def main_test():
                         help='random seed (default: 1)')
     parser.add_argument('--log-interval', type=int, default=10, metavar='N',
                         help='how many batches to wait before logging training status')
+    parser.add_argument('--save-interval', type=int, default=20,
+                        help='After # of epoch, save the current Model')
     parser.add_argument('--save-model', action='store_true', default=True,
                         help='save the current Model')
     parser.add_argument('--save-directory', type=str, default='trained_models',
@@ -236,4 +241,4 @@ def main_test():
 
 
 if __name__ == '__main__':
-    main_test()
+    print(main_test())

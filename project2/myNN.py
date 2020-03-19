@@ -598,7 +598,9 @@ class GoogLeNet(nn.Module):
                 warnings.warn("Scripted GoogleNet always returns GoogleNetOutputs Tuple")
             return GoogLeNetOutputs(x, aux2, aux1)
         else:'''
-        return self.eager_outputs(x, aux2, aux1)
+        if aux_defined:
+            return self.eager_outputs(x, aux2, aux1)
+        return x
 
 
 class Inception(nn.Module):
