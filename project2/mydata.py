@@ -7,6 +7,7 @@ from PIL import Image
 import cv2
 import math
 import numpy as np
+import random
 from torchvision import transforms
 
 
@@ -146,6 +147,22 @@ class RandomFlip(object):
                 'net': net,
                 'angle': angle}
 
+
+class RandomNoise(object):
+    """
+        Randomly flip left and right
+    """
+    def __call__(self, sample):
+        image, landmarks, net = sample['image'], sample['landmarks'], sample['net']
+        # Flip image randomly
+        img_c, img_h, img_w = image.shape
+        for i in range(random.randint(100, 500)):
+            h = random.randint(0, img_h-5)
+            w = random.randint(0, img_w-5)
+            image[:, h+4, w+4] = 0
+        return {'image': image,
+                'landmarks': landmarks,
+                'net': net}
 
 class ToTensor(object):
     """
@@ -320,7 +337,8 @@ def load_data(phase, net, roi, angle):
             RandomRotate(),
             Normalize(),  # do channel normalization
             ToTensor(),   # convert to torch type: NxCxHxW
-            RandomErasing()
+            RandomErasing(),
+            RandomNoise()
         ]
         )
     else:
