@@ -61,5 +61,6 @@ def test(args, model, valid_loader, output_file='output.txt'):
                 path = batch['path']
                 # generated
                 output_pts = model(img)
-                outputs = output_pts.numpy()[0]
-                f.write(' '.join(('%s %s' % (path, ' '.join([str(i) for i in rect])), [str(i) for i in outputs]))+'\n')
+                #outputs = output_pts.numpy()
+                #rect_np = rect.numpy()
+                #f.write(' '.join(('%s %s' % (path, ' '.join([str(i) for i in rect])), [str(i) for i in outputs]))+'\n')

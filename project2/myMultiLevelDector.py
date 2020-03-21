@@ -2,84 +2,118 @@ import argparse
 import os
 import time
 
+import numpy as np
 from torch import nn
 import torch.optim as optim
 
-from mydata import get_train_test_set
-from myNN import Net, resnet18, resnet34, resnet50, resnet101, resnet152, GoogLeNet
+from myMultiLevelData import get_train_test_set
+from myMultiLevelNN import Net, resnet18, resnet34, resnet50, resnet101, resnet152, GoogLeNet
 from predict import predict, test
 
 import torch
 
-# imports the torch_xla package
-try:
-    import torch_xla
-    import torch_xla.core.xla_model as xm
-except ModuleNotFoundError:
-    print('No TPUs scheme')
-
 torch.set_default_tensor_type(torch.FloatTensor)
 
 
+def subtrain(img, device, landmark, optimizer, model, pts_criterion, retain=True):
+    # ground truth
+    input_img = img.to(device)
+    target_pts = landmark.to(device)
+
+    # clear the gradients of all optimized variables
+    optimizer.zero_grad()
+
+    # get output
+    output_pts = model(input_img)
+
+    # get loss
+    loss = pts_criterion(output_pts, target_pts)
+
+    # do BP automatically
+    loss.backward(retain_graph=retain)
+    optimizer.step()
+
+    return loss.item(), output_pts
+
+
+def subtest(valid_img, device, landmark, model, pts_criterion):
+    input_img = valid_img.to(device)
+    target_pts = landmark.to(device)
+
+    output_pts = model(input_img)
+
+    return pts_criterion(output_pts, target_pts).item(), output_pts
+
+
 def train(args, train_loader, valid_loader, model, criterion, optimizer, device, scheduler=None):
+    loader_order = ['u.pt', 'm.pt', 'd.pt', 'all.pt']
     # save model
     if args.save_model:
         if not os.path.exists(args.save_directory):
             os.makedirs(args.save_directory)
+    # load checkpoint
     if args.checkpoint != '':
-        model.load_state_dict(torch.load(args.checkpoint))
-        print('Training from checkpoint: %s' % args.checkpoint)
+        for i in range(len(model)):
+            checkpoint = torch.load('{}/{}'.format(args.checkpoint, loader_order[i]))
+            model[i].load_state_dict(checkpoint['model_state_dict'])
+            optimizer[i].load_state_dict(checkpoint['optimizer_state_dict'])
+            print('Training from checkpoint: %s/%s' % (args.checkpoint, loader_order[i]))
 
     epoch = args.epochs
     pts_criterion = criterion
 
-    train_losses = []
-    valid_losses = []
+    l1_train_losses = []
+    l2_train_losses = []
+    l1_valid_losses = []
+    l2_valid_losses = []
     time_elapse1 = []
     time_elapse2 = []
 
-    for epoch_id in range(1, epoch+1):
-        # monitor training loss
-        train_loss = 0.0
-        valid_loss = 0.0
+    for epoch_id in range(1, epoch + 1):
         ######################
         # training the model #
         ######################
-        model.train()
+        for m in model:
+            m.train()
         start = time.perf_counter()
         for batch_idx, batch in enumerate(train_loader):
             img = batch['image']
-            landmark = batch['landmarks']
+            # Split face information into Eye part, noise part and mouth part
+            landmarku = batch['landmarka']
+            landmarkm = batch['landmarkm']
+            landmarkd = batch['landmarkd']
+            # Train separately
 
-            # ground truth
-            input_img = img.to(device)
-            target_pts = landmark.to(device)
-
-            # clear the gradients of all optimized variables
-            optimizer.zero_grad()
-
-            # get output
-            output_pts = model(input_img)
-
-            # get loss
-            loss = pts_criterion(output_pts, target_pts)
-
-            # do BP automatically
-            loss.backward()
-            optimizer.step()
-
-
-            # show log info
+            l1_result = [
+                subtrain(img, device, landmarku, optimizer[0], model[0], pts_criterion),
+                subtrain(img, device, landmarkm, optimizer[1], model[1], pts_criterion),
+                subtrain(img, device, landmarkd, optimizer[2], model[2], pts_criterion, retain=False)
+            ]
+            landmark = torch.cat([i[1].transpose(1, 0) for i in l1_result], dim=0)
+            l2_result = [
+                subtrain(img, device, landmark.transpose(0, 1), optimizer[3], model[3], pts_criterion, retain=False)
+            ]
             if batch_idx % args.log_interval == 0:
-                print('Train Epoch: {} [{}/{} ({:.0f}%)]\t pts_loss: {:.6f}'.format(
-                        epoch_id,
-                        batch_idx * len(img),
-                        len(train_loader.dataset),
-                        100. * batch_idx / len(train_loader),
-                        loss.item()
-                    )
+                l1_train_losses.append([i[0] for i in l1_result])
+                l2_train_losses.append([i[0] for i in l2_result])
+                print('L1 Train Epoch: {} [{}/{} ({:.0f}%)]\t pts_loss: {:.6f} {:.6f} {:.6f}'.format(
+                    epoch_id,
+                    batch_idx * len(img),
+                    len(train_loader.dataset),
+                    100. * batch_idx / len(train_loader),
+                    l1_train_losses[-1][0],
+                    l1_train_losses[-1][1],
+                    l1_train_losses[-1][2]
                 )
-                train_losses.append(loss.item())
+                )
+                print('L2 Train Epoch: {} [{}/{} ({:.0f}%)]\t pts_loss: {:.6f}'.format(
+                    epoch_id,
+                    batch_idx * len(img),
+                    len(train_loader.dataset),
+                    100. * batch_idx / len(train_loader),
+                    l2_train_losses[-1][0]
+                )
+                )
 
         if scheduler:  # Finetune with learning rate scheduler
             scheduler.step()
@@ -89,9 +123,10 @@ def train(args, train_loader, valid_loader, model, criterion, optimizer, device,
         ######################
         # validate the model #
         ######################
-        valid_mean_pts_loss = 0.0
+        l1_valid_mean_pts_loss = 0.0
 
-        model.eval()  # prep model for evaluation
+        for m in model:
+            m.eval()  # prep model for evaluation
         start = time.perf_counter()
         with torch.no_grad():
             valid_batch_cnt = 0
@@ -99,32 +134,44 @@ def train(args, train_loader, valid_loader, model, criterion, optimizer, device,
             for valid_batch_idx, batch in enumerate(valid_loader):
                 valid_batch_cnt += 1
                 valid_img = batch['image']
-                landmark = batch['landmarks']
+                # Split face information into Eye part, noise part and mouth part
+                landmarku = batch['landmarksu']
+                landmarkm = batch['landmarksm']
+                landmarkd = batch['landmarksd']
 
-                input_img = valid_img.to(device)
-                target_pts = landmark.to(device)
+                l1_result = [
+                    subtest(valid_img, device, landmarku, model[0], pts_criterion),
+                    subtest(valid_img, device, landmarkm, model[1], pts_criterion),
+                    subtest(valid_img, device, landmarkd, model[2], pts_criterion)
+                ]
+                landmark = torch.cat([i[1] for i in l1_result])
+                l2_result = [
+                    subtest(valid_img, device, landmark, model[3], pts_criterion)
+                ]
 
-                output_pts = model(input_img)
+                l1_valid_mean_pts_loss = [l1_result[i][0]+l1_valid_mean_pts_loss[i] for i in range(len(l1_result))]
+                l2_valid_mean_pts_loss = [l2_result[i][0]+l2_valid_mean_pts_loss[i] for i in range(len(l2_result))]
+            l1_valid_mean_pts_loss = [i/valid_batch_cnt*1.0 for i in l1_valid_mean_pts_loss]
+            print('Valid L1: pts_loss:', l1_valid_mean_pts_loss)
+            l2_valid_mean_pts_loss = [i/valid_batch_cnt*1.0 for i in l2_valid_mean_pts_loss]
 
-                valid_loss = pts_criterion(output_pts, target_pts)
-
-                valid_mean_pts_loss += valid_loss.item()
-
-            valid_mean_pts_loss /= valid_batch_cnt * 1.0
-            print('Valid: pts_loss: {:.6f}'.format(
-                    valid_mean_pts_loss
-                )
-            )
-            valid_losses.append(valid_mean_pts_loss)
+            l1_valid_losses.append(l1_valid_mean_pts_loss)
+            l2_valid_losses.append(l2_valid_mean_pts_loss)
         elapsed = time.perf_counter() - start
         print("Evaluation elapsed: %.5f" % elapsed)
         print('====================================================')
         time_elapse2.append(elapsed)
         # save model
         if args.save_model and epoch_id % args.save_interval == 0:
-            saved_model_name = os.path.join(args.save_directory, 'detector_epoch' + '_' + str(epoch_id) + '.pt')
-            torch.save(model.state_dict(), saved_model_name)
-    return train_losses, valid_losses, time_elapse1, time_elapse1
+            f = os.path.join(args.save_directory, 'detector_epoch' + '_' + str(epoch_id))
+            if not os.path.exists(f):
+                os.makedirs(f)
+            for i in range(len(model)):
+                saved_model_name = os.path.join(f, loader_order[i])
+                torch.save({'model_state_dict': model[i].state_dict(),
+                            'optimizer_state_dict': optimizer[i].state_dict()
+                            }, saved_model_name)
+    return l1_train_losses, l2_valid_losses, l1_valid_losses, l2_valid_losses
 
 
 def main_test():
@@ -141,8 +188,6 @@ def main_test():
                         help='select optimzer SGD, adam, or other')
     parser.add_argument('--momentum', type=float, default=0.5, metavar='M',
                         help='momentum (default: 0.5)')
-    parser.add_argument('--use-tpu', action='store_true', default=False,
-                        help='enable cloud tpu training')
     parser.add_argument('--no-cuda', action='store_true', default=False,
                         help='disables CUDA training')
     parser.add_argument('--seed', type=int, default=1, metavar='S',
@@ -155,7 +200,7 @@ def main_test():
                         help='save the current Model')
     parser.add_argument('--save-directory', type=str, default='trained_models',
                         help='learnt models are saving here')
-    parser.add_argument('--phase', type=str, default='Train',   # Train/train, Predict/predict, Finetune/finetune
+    parser.add_argument('--phase', type=str, default='Train',  # Train/train, Predict/predict, Finetune/finetune
                         help='training, predicting or finetuning')
     parser.add_argument('--checkpoint', type=str, default='',
                         help='continuing the training from specified checkpoint')
@@ -171,18 +216,12 @@ def main_test():
                         help='scheduler selection for fine tune phrase')
     parser.add_argument('--loss', type=str, default='L2',
                         help='loss function')
-    parser.add_argument('--heatmap', action='store_true', default=False,
-                        help='improve precision with heatmap')
     args = parser.parse_args()
     print(args)
     ###################################################################################
     torch.manual_seed(args.seed)
     use_cuda = not args.no_cuda and torch.cuda.is_available()
-    if args.use_tpu:
-        device = xm.xla_device()
-        device2 = xm.xla_device(n=2, devkind='TPU')
-    else:
-        device = torch.device("cuda" if use_cuda else "cpu")  # cuda:0
+    device = torch.device("cuda" if use_cuda else "cpu")  # cuda:0
     # For multi GPUs, nothing need to change here
     kwargs = {'num_workers': 1, 'pin_memory': True} if use_cuda else {}
 
@@ -192,85 +231,59 @@ def main_test():
     valid_loader = torch.utils.data.DataLoader(test_set, batch_size=args.test_batch_size)
     ####################################################################
     print('===> Building Model')
-    pts_len = 42
-    if args.use_tpu:
-        # TPU is only an experiment on ResNet101
-        model = resnet101()
+    model = []
+    '''if args.net == 'ResNet152' or args.net == 'resnet152':
+        model = resnet152()
         in_features = model.fc.in_features
         model.fc = nn.Linear(in_features, pts_len)
         model = model.to(device)
-    else:
-        # For single GPU
-        if args.net == 'ResNet18' or args.net == 'resnet18':
-            model = resnet18()
-            in_features = model.fc.in_features
-            model.fc = nn.Linear(in_features, pts_len)
-            model = model.to(device)
-        elif args.net == 'ResNet34' or args.net == 'resnet34':
-            model = resnet34()
-            in_features = model.fc.in_features
-            model.fc = nn.Linear(in_features, pts_len)
-            model = model.to(device)
-        elif args.net == 'ResNet50' or args.net == 'resnet50':
-            model = resnet50()
-            in_features = model.fc.in_features
-            model.fc = nn.Linear(in_features, pts_len)
-            model = model.to(device)
-        elif args.net == 'ResNet101' or args.net == 'resnet101':
-            model = resnet101()
-            in_features = model.fc.in_features
-            model.fc = nn.Linear(in_features, pts_len)
-            model = model.to(device)
-        elif args.net == 'ResNet152' or args.net == 'resnet152':
-            model = resnet152()
-            in_features = model.fc.in_features
-            model.fc = nn.Linear(in_features, pts_len)
-            model = model.to(device)
-        elif args.net == 'GoogLeNet' or args.net == 'googlenet':
-            model = GoogLeNet(num_classes=pts_len).to(device)
-        else:
-            model = Net().to(device)
+    '''
+    model.append(Net(num_classes=12).to(device))
+    model.append(Net(num_classes=4).to(device))
+    model.append(Net(num_classes=5).to(device))
+    model.append(Net(num_classes=21).to(device))
     ####################################################################
-    if args.loss == 'L2':
-        criterion_pts = nn.MSELoss()
-    elif args.loss == 'L1':
+    if args.loss == 'L1':
         criterion_pts = nn.L1Loss()
     elif args.loss == 'SL1':
         criterion_pts = nn.SmoothL1Loss()
+    else:
+        criterion_pts = nn.MSELoss()
     ####################################################################
     if args.alg == 'SGD':
-        optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
+        optimizer = [optim.SGD(m.parameters(), lr=args.lr, momentum=args.momentum) for m in model]
     elif args.alg == 'adam' or args.alg == 'Adam':
-        optimizer = optim.Adam(model.parameters(), lr=args.lr)
+        optimizer = [optim.Adam(m.parameters(), lr=args.lr) for m in model]
+    else:
+        optimizer = [optim.Adam(m.parameters(), lr=args.lr) for m in model]
     ####################################################################
     if args.phase == 'Train' or args.phase == 'train':
         print('===> Start Training')
-        train_losses, valid_losses, time_elapse1, time_elapse2 = \
+        l1_train_losses, l2_train_losses, l1_valid_losses, l2_valid_losses = \
             train(args, train_loader, valid_loader, model, criterion_pts, optimizer, device)
         with open(args.save_directory + 'train_result.txt', 'w+') as f:
-            f.write(' '.join(train_losses) + '\n')
-            f.write(' '.join(valid_losses) + '\n')
-            f.write(' '.join(time_elapse1) + '\n')
-            f.write(' '.join(time_elapse2) + '\n')
+            f.write(' '.join(l1_train_losses) + '\n')
+            f.write(' '.join(l2_train_losses) + '\n')
+            f.write(' '.join(l1_valid_losses) + '\n')
+            f.write(' '.join(l2_valid_losses) + '\n')
         print('====================================================')
-
     elif args.phase == 'Test' or args.phase == 'test':
         print('===> Test')
         test(args, model, valid_loader, output_file='output.txt')
         print('====================================================')
     elif args.phase == 'Finetune' or args.phase == 'finetune':
         print('===> Finetune')
-        if args.scheduler == '':
+        if args.scheduler == 'StepLR100':
+            scheduler = [torch.optim.lr_scheduler.StepLR(o, step_size=25) for o in optimizer]
+        else:
             scheduler = None
-        elif args.scheduler == 'StepLR100':
-            scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=25)
-        train_losses, valid_losses, time_elapse1, time_elapse2 = \
+        l1_train_losses, l2_train_losses, l1_valid_losses, l2_valid_losses = \
             train(args, train_loader, valid_loader, model, criterion_pts, optimizer, device, scheduler=scheduler)
         with open(args.save_directory + 'train_result.txt', 'w+') as f:
-            f.write(' '.join(train_losses) + '\n')
-            f.write(' '.join(valid_losses) + '\n')
-            f.write(' '.join(time_elapse1) + '\n')
-            f.write(' '.join(time_elapse2) + '\n')
+            f.write(' '.join(l1_train_losses) + '\n')
+            f.write(' '.join(l2_train_losses) + '\n')
+            f.write(' '.join(l1_valid_losses) + '\n')
+            f.write(' '.join(l2_valid_losses) + '\n')
         print('====================================================')
     elif args.phase == 'Predict' or args.phase == 'predict':
         print('===> Predict')
