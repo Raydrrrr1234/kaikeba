@@ -138,7 +138,7 @@ def main_test():
     parser.add_argument('--lr', type=float, default=0.001, metavar='LR',
                         help='learning rate (default: 0.001)')
     parser.add_argument('--alg', type=str, default='SGD',
-                        help='Select optimzer SGD, adam, or other')
+                        help='select optimzer SGD, adam, or other')
     parser.add_argument('--momentum', type=float, default=0.5, metavar='M',
                         help='momentum (default: 0.5)')
     parser.add_argument('--use-tpu', action='store_true', default=False,
@@ -150,7 +150,7 @@ def main_test():
     parser.add_argument('--log-interval', type=int, default=10, metavar='N',
                         help='how many batches to wait before logging training status')
     parser.add_argument('--save-interval', type=int, default=20,
-                        help='After # of epoch, save the current Model')
+                        help='after # of epoch, save the current Model')
     parser.add_argument('--save-model', action='store_true', default=True,
                         help='save the current Model')
     parser.add_argument('--save-directory', type=str, default='trained_models',
@@ -168,9 +168,11 @@ def main_test():
     parser.add_argument('--num-class', type=int, default=42,
                         help='default number of class 42')
     parser.add_argument('--scheduler', type=str, default='',
-                        help='Scheduler selection for fine tune phrase')
+                        help='scheduler selection for fine tune phrase')
     parser.add_argument('--loss', type=str, default='L2',
-                        help='Loss function')
+                        help='loss function')
+    parser.add_argument('--heatmap', action='store_true', default=False,
+                        help='improve precision with heatmap')
     args = parser.parse_args()
     print(args)
     ###################################################################################
@@ -190,41 +192,42 @@ def main_test():
     valid_loader = torch.utils.data.DataLoader(test_set, batch_size=args.test_batch_size)
     ####################################################################
     print('===> Building Model')
+    pts_len = 42
     if args.use_tpu:
         # TPU is only an experiment on ResNet101
         model = resnet101()
         in_features = model.fc.in_features
-        model.fc = nn.Linear(in_features, 42)
+        model.fc = nn.Linear(in_features, pts_len)
         model = model.to(device)
     else:
         # For single GPU
         if args.net == 'ResNet18' or args.net == 'resnet18':
             model = resnet18()
             in_features = model.fc.in_features
-            model.fc = nn.Linear(in_features, 42)
+            model.fc = nn.Linear(in_features, pts_len)
             model = model.to(device)
         elif args.net == 'ResNet34' or args.net == 'resnet34':
             model = resnet34()
             in_features = model.fc.in_features
-            model.fc = nn.Linear(in_features, 42)
+            model.fc = nn.Linear(in_features, pts_len)
             model = model.to(device)
         elif args.net == 'ResNet50' or args.net == 'resnet50':
             model = resnet50()
             in_features = model.fc.in_features
-            model.fc = nn.Linear(in_features, 42)
+            model.fc = nn.Linear(in_features, pts_len)
             model = model.to(device)
         elif args.net == 'ResNet101' or args.net == 'resnet101':
             model = resnet101()
             in_features = model.fc.in_features
-            model.fc = nn.Linear(in_features, 42)
+            model.fc = nn.Linear(in_features, pts_len)
             model = model.to(device)
         elif args.net == 'ResNet152' or args.net == 'resnet152':
             model = resnet152()
             in_features = model.fc.in_features
-            model.fc = nn.Linear(in_features, 42)
+            model.fc = nn.Linear(in_features, pts_len)
             model = model.to(device)
         elif args.net == 'GoogLeNet' or args.net == 'googlenet':
-            model = GoogLeNet(num_classes=args.num_class).to(device)
+            model = GoogLeNet(num_classes=pts_len).to(device)
         else:
             model = Net().to(device)
     ####################################################################
@@ -234,8 +237,6 @@ def main_test():
         criterion_pts = nn.L1Loss()
     elif args.loss == 'SL1':
         criterion_pts = nn.SmoothL1Loss()
-    elif args.loss == 'SL1':
-        criterion_pts = nn.Loss()
     ####################################################################
     if args.alg == 'SGD':
         optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
