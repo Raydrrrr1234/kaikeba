@@ -187,17 +187,16 @@ class ToTensor(object):
 class Partition(object):
     """
         Partition landmarks to three part
-        Upper part: 1,2,3,4,5,6,7,17,8,9,18,10
-        Middle part: 11,19,13,12
-        Lower part: 14,15,16,20,21
+        Upper part: 1,2,3,4,5,6,7,17,8,9,18,10 (12)
+        Middle part: 11,19,13,12 (4)
+        Lower part: 14,15,16,20,21 (5)
     """
 
     def __call__(self, sample):
         image, landmarks, net = sample['image'], sample['landmarks'], sample['net']
         return {'image': image,
-                'landmarku': torch.FloatTensor([landmarks[i] for i in (1,2,3,4,5,6,7,17,8,9,18,10)]),
-                'landmarkm': torch.FloatTensor([landmarks[i] for i in (11,19,13,12)]),
-                'landmarkd': torch.FloatTensor([landmarks[i] for i in (14,15,16,20,21)]),
+                'landmarku': torch.FloatTensor([landmarks[i] for i in (1,2,3,4,5,6,7,17,8,9,18,10,11,19,13,12)]),
+                'landmarkd': torch.FloatTensor([landmarks[i] for i in (11,19,13,12,14,15,16,20,21)]),
                 'landmarks': torch.FloatTensor([landmarks[i] for i in (1,2,3,4,5,6,7,17,8,9,18,10,11,19,13,12,14,15,16,20,21)]),
                 'net': net}
 

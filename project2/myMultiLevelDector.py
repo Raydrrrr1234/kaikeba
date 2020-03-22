@@ -26,14 +26,9 @@ def subtrain(img, device, landmark, optimizer, model, pts_criterion, retain=True
     # get output
     output_pts = model(input_img)
 
-    # get loss
-    loss = pts_criterion(output_pts, target_pts)
 
-    # do BP automatically
-    loss.backward(retain_graph=retain)
-    optimizer.step()
 
-    return loss.item(), output_pts
+    return target_pts, output_pts
 
 
 def subtest(valid_img, device, landmark, model, pts_criterion):
@@ -42,11 +37,11 @@ def subtest(valid_img, device, landmark, model, pts_criterion):
 
     output_pts = model(input_img)
 
-    return pts_criterion(output_pts, target_pts).item(), output_pts
+    return target_pts, output_pts
 
 
 def train(args, train_loader, valid_loader, model, criterion, optimizer, device, scheduler=None):
-    loader_order = ['u.pt', 'm.pt', 'd.pt', 'all.pt']
+    loader_order = ['u.pt', 'd.pt', 's.pt']
     # save model
     if args.save_model:
         if not os.path.exists(args.save_directory):
@@ -79,9 +74,9 @@ def train(args, train_loader, valid_loader, model, criterion, optimizer, device,
         for batch_idx, batch in enumerate(train_loader):
             img = batch['image']
             # Split face information into Eye part, noise part and mouth part
-            landmarku = batch['landmarka']
-            landmarkm = batch['landmarkm']
-            landmarkd = batch['landmarkd']
+            landmarku = batch['landmarku']
+            landmarkm = batch['landmarkd']
+            landmarkd = batch['landmarks']
             # Train separately
 
             l1_result = [
@@ -89,31 +84,40 @@ def train(args, train_loader, valid_loader, model, criterion, optimizer, device,
                 subtrain(img, device, landmarkm, optimizer[1], model[1], pts_criterion),
                 subtrain(img, device, landmarkd, optimizer[2], model[2], pts_criterion, retain=False)
             ]
-            landmark = torch.cat([i[1].transpose(1, 0) for i in l1_result], dim=0)
-            l2_result = [
-                subtrain(img, device, landmark.transpose(0, 1), optimizer[3], model[3], pts_criterion, retain=False)
-            ]
+            #landmark = torch.cat([i[1].transpose(1, 0) for i in l1_result], dim=0)
+            #l1_list = [[l1[:l] for l in range(l1.shape[1])] for l1 in l1_result]
+
+            # do net 1 BP automatically
+            loss1 = pts_criterion((l1_result[0][1]+l1_result[2][1][:, :16])/2, l1_result[0][0])
+            loss1.backward(retain_graph=True)
+            optimizer[0].step()
+
+            # do net 2 BP automatically
+            loss2 = pts_criterion((l1_result[1][1] + l1_result[2][1][:, 12:]) / 2, l1_result[1][0])
+            loss2.backward(retain_graph=True)
+            optimizer[1].step()
+
+            l1_result[2][1][:, :12] = (l1_result[2][1][:, :12]+l1_result[0][1][:, :12])/2
+            l1_result[2][1][:, 12:16] = (l1_result[2][1][:, 12:16]+l1_result[0][1][:, 12:16]+l1_result[1][1][:, :4])/3
+            l1_result[2][1][:, 16:] = (l1_result[2][1][:, 16:]+l1_result[1][1][:, 4:])/2
+            # do net 2 BP automatically
+            loss3 = pts_criterion(l1_result[2][1], l1_result[2][0])
+            loss3.backward()
+            optimizer[2].step()
+
             if batch_idx % args.log_interval == 0:
                 l1_train_losses.append([i[0] for i in l1_result])
-                l2_train_losses.append([i[0] for i in l2_result])
                 print('L1 Train Epoch: {} [{}/{} ({:.0f}%)]\t pts_loss: {:.6f} {:.6f} {:.6f}'.format(
                     epoch_id,
                     batch_idx * len(img),
                     len(train_loader.dataset),
                     100. * batch_idx / len(train_loader),
-                    l1_train_losses[-1][0],
-                    l1_train_losses[-1][1],
-                    l1_train_losses[-1][2]
+                    loss1,
+                    loss2,
+                    loss3
                 )
                 )
-                print('L2 Train Epoch: {} [{}/{} ({:.0f}%)]\t pts_loss: {:.6f}'.format(
-                    epoch_id,
-                    batch_idx * len(img),
-                    len(train_loader.dataset),
-                    100. * batch_idx / len(train_loader),
-                    l2_train_losses[-1][0]
-                )
-                )
+
 
         if scheduler:  # Finetune with learning rate scheduler
             scheduler.step()
@@ -130,33 +134,40 @@ def train(args, train_loader, valid_loader, model, criterion, optimizer, device,
         start = time.perf_counter()
         with torch.no_grad():
             valid_batch_cnt = 0
-
+            mean_loss1 = mean_loss2 = mean_loss3 = 0
             for valid_batch_idx, batch in enumerate(valid_loader):
                 valid_batch_cnt += 1
                 valid_img = batch['image']
                 # Split face information into Eye part, noise part and mouth part
-                landmarku = batch['landmarksu']
-                landmarkm = batch['landmarksm']
-                landmarkd = batch['landmarksd']
+                landmarku = batch['landmarku']
+                landmarkm = batch['landmarkd']
+                landmarkd = batch['landmarks']
 
                 l1_result = [
                     subtest(valid_img, device, landmarku, model[0], pts_criterion),
                     subtest(valid_img, device, landmarkm, model[1], pts_criterion),
                     subtest(valid_img, device, landmarkd, model[2], pts_criterion)
                 ]
-                landmark = torch.cat([i[1] for i in l1_result])
-                l2_result = [
-                    subtest(valid_img, device, landmark, model[3], pts_criterion)
-                ]
+                # net 1
+                loss1 = pts_criterion((l1_result[0][1] + l1_result[2][1][:, :16]) / 2, l1_result[0][0])
 
-                l1_valid_mean_pts_loss = [l1_result[i][0]+l1_valid_mean_pts_loss[i] for i in range(len(l1_result))]
-                l2_valid_mean_pts_loss = [l2_result[i][0]+l2_valid_mean_pts_loss[i] for i in range(len(l2_result))]
-            l1_valid_mean_pts_loss = [i/valid_batch_cnt*1.0 for i in l1_valid_mean_pts_loss]
+                # net 2
+                loss2 = pts_criterion((l1_result[1][1] + l1_result[2][1][:, 12:]) / 2, l1_result[1][0])
+
+                # net 3
+                l1_result[2][1][:, :12] = (l1_result[2][1][:, :12] + l1_result[0][1][:, :12]) / 2
+                l1_result[2][1][:, 12:16] = (l1_result[2][1][:, 12:16] + l1_result[0][1][:, 12:16] + l1_result[1][1][:, :4]) / 3
+                l1_result[2][1][:, 16:] = (l1_result[2][1][:, 16:] + l1_result[1][1][:, 4:]) / 2
+                loss3 = pts_criterion(l1_result[2][1], l1_result[2][0])
+
+
+                mean_loss1 += loss1
+                mean_loss2 += loss2
+                mean_loss3 += loss3
+            l1_valid_mean_pts_loss = [i/valid_batch_cnt*1.0 for i in (mean_loss1, mean_loss2, mean_loss3)]
             print('Valid L1: pts_loss:', l1_valid_mean_pts_loss)
-            l2_valid_mean_pts_loss = [i/valid_batch_cnt*1.0 for i in l2_valid_mean_pts_loss]
 
             l1_valid_losses.append(l1_valid_mean_pts_loss)
-            l2_valid_losses.append(l2_valid_mean_pts_loss)
         elapsed = time.perf_counter() - start
         print("Evaluation elapsed: %.5f" % elapsed)
         print('====================================================')
@@ -238,9 +249,8 @@ def main_test():
         model.fc = nn.Linear(in_features, pts_len)
         model = model.to(device)
     '''
-    model.append(Net(num_classes=12).to(device))
-    model.append(Net(num_classes=4).to(device))
-    model.append(Net(num_classes=5).to(device))
+    model.append(Net(num_classes=16).to(device))
+    model.append(Net(num_classes=9).to(device))
     model.append(Net(num_classes=21).to(device))
     ####################################################################
     if args.loss == 'L1':
