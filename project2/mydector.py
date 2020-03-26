@@ -7,7 +7,8 @@ import torch.optim as optim
 
 from mydata import get_train_test_set
 from myNN import Net, resnet18, resnet34, resnet50, resnet101, resnet152, GoogLeNet
-from predict import predict, test
+from myPredict import predict, test
+from myFPN import FPN101
 
 import torch
 
@@ -21,13 +22,16 @@ except ModuleNotFoundError:
 torch.set_default_tensor_type(torch.FloatTensor)
 
 
-def train(args, train_loader, valid_loader, model, criterion, optimizer, device, scheduler=None):
+def train(args, train_loader, valid_loader, model, criterion, optimizer, device, scheduler=None, cuda=False):
     # save model
     if args.save_model:
         if not os.path.exists(args.save_directory):
             os.makedirs(args.save_directory)
     if args.checkpoint != '':
-        model.load_state_dict(torch.load(args.checkpoint))
+        if cuda:
+            model.load_state_dict(torch.load(args.checkpoint, map_location={'cuda:0': 'cuda'}))
+        else:
+            model.load_state_dict(torch.load(args.checkpoint, map_location={'cuda:0': 'cpu'}))
         print('Training from checkpoint: %s' % args.checkpoint)
 
     epoch = args.epochs
@@ -67,7 +71,6 @@ def train(args, train_loader, valid_loader, model, criterion, optimizer, device,
             # do BP automatically
             loss.backward()
             optimizer.step()
-
 
             # show log info
             if batch_idx % args.log_interval == 0:
@@ -173,6 +176,10 @@ def main_test():
                         help='loss function')
     parser.add_argument('--heatmap', action='store_true', default=False,
                         help='improve precision with heatmap')
+    parser.add_argument('--layer-lockdown', type=str, default='-3:-1',
+                        help='Freeze the specific layer')
+    parser.add_argument('--use-bn', action='store_true', default=False,
+                        help='Add batch normalization to the first conv1_1')
     args = parser.parse_args()
     print(args)
     ###################################################################################
@@ -228,8 +235,10 @@ def main_test():
             model = model.to(device)
         elif args.net == 'GoogLeNet' or args.net == 'googlenet':
             model = GoogLeNet(num_classes=pts_len).to(device)
+        elif args.net == 'FPN':
+            model = FPN101(args.batch_size).to(device)
         else:
-            model = Net().to(device)
+            model = Net(args.use_bn).to(device)
     ####################################################################
     if args.loss == 'L2':
         criterion_pts = nn.MSELoss()
@@ -238,34 +247,40 @@ def main_test():
     elif args.loss == 'SL1':
         criterion_pts = nn.SmoothL1Loss()
     ####################################################################
+    # Freeze all layer except ip3, if current mode is finetune
+    if args.phase == 'Finetune':
+        start, end = (args.layer_lockdown.split(':'))
+        for param in list(model.parameters())[start:end]:
+            param.requires_grad = False
     if args.alg == 'SGD':
         optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
     elif args.alg == 'adam' or args.alg == 'Adam':
         optimizer = optim.Adam(model.parameters(), lr=args.lr)
     ####################################################################
+    # Add scheduler
+    if args.scheduler == '':
+        scheduler = None
+    elif args.scheduler == 'StepLR100':
+        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=25)
+    ####################################################################
     if args.phase == 'Train' or args.phase == 'train':
         print('===> Start Training')
         train_losses, valid_losses, time_elapse1, time_elapse2 = \
-            train(args, train_loader, valid_loader, model, criterion_pts, optimizer, device)
+            train(args, train_loader, valid_loader, model, criterion_pts, optimizer, device, scheduler=scheduler, cuda=use_cuda)
         with open(args.save_directory + 'train_result.txt', 'w+') as f:
             f.write(' '.join(train_losses) + '\n')
             f.write(' '.join(valid_losses) + '\n')
             f.write(' '.join(time_elapse1) + '\n')
             f.write(' '.join(time_elapse2) + '\n')
         print('====================================================')
-
     elif args.phase == 'Test' or args.phase == 'test':
         print('===> Test')
-        test(args, model, valid_loader, output_file='output.txt')
+        test(args, model, valid_loader, output_file='output.txt', cuda=use_cuda)
         print('====================================================')
     elif args.phase == 'Finetune' or args.phase == 'finetune':
         print('===> Finetune')
-        if args.scheduler == '':
-            scheduler = None
-        elif args.scheduler == 'StepLR100':
-            scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=25)
         train_losses, valid_losses, time_elapse1, time_elapse2 = \
-            train(args, train_loader, valid_loader, model, criterion_pts, optimizer, device, scheduler=scheduler)
+            train(args, train_loader, valid_loader, model, criterion_pts, optimizer, device, scheduler=scheduler, cuda=use_cuda)
         with open(args.save_directory + 'train_result.txt', 'w+') as f:
             f.write(' '.join(train_losses) + '\n')
             f.write(' '.join(valid_losses) + '\n')
@@ -274,7 +289,7 @@ def main_test():
         print('====================================================')
     elif args.phase == 'Predict' or args.phase == 'predict':
         print('===> Predict')
-        predict(args, model, valid_loader)
+        predict(args, model, valid_loader, cuda=use_cuda)
         print('====================================================')
 
 

@@ -25,15 +25,15 @@ def main_test():
     for i in kps:
         cv2.drawKeypoints(img, [i], img, color=(0, 0, 255), flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
         cv2.imshow('Original', cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
-        cv2.waitKey(0)
-    '''rlr = RandomFlip()
+        '''cv2.waitKey(0)
+    rlr = RandomFlip()
     sample = rlr(sample)
     img = np.array(sample['image'])
     kps = [cv2.KeyPoint(i, j, 1) for (i, j) in zip(sample['landmarks'][::2], sample['landmarks'][1::2])]
     cv2.drawKeypoints(img, kps, img, color=(0, 0, 255), flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
     cv2.imshow('RandomFlipLR', cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
     print(img.shape)
-    cv2.waitKey(0)
+    cv2.waitKey(0)'''
     rr = RandomRotate()
     sample = rr(sample)
     img = np.array(sample['image'])
@@ -42,7 +42,7 @@ def main_test():
     cv2.imshow('RandomRotate', cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
     print(img.shape)
     cv2.waitKey(0)
-    rn = RandomNoise()
+    '''rn = RandomNoise()
     img = np.array(image)
     img = img.transpose((2, 0, 1))
     sample['image'] = torch.from_numpy(img)

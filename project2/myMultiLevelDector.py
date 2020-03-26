@@ -8,7 +8,7 @@ import torch.optim as optim
 
 from myMultiLevelData import get_train_test_set
 from myMultiLevelNN import Net, resnet18, resnet34, resnet50, resnet101, resnet152, GoogLeNet
-from predict import predict, test
+from myPredict import predict, test
 
 import torch
 
@@ -40,8 +40,9 @@ def subtest(valid_img, device, landmark, model, pts_criterion):
     return target_pts, output_pts
 
 
-def train(args, train_loader, valid_loader, model, criterion, optimizer, device, scheduler=None):
+def train(args, train_loader, valid_loader, model, criterion, optimizer, device, scheduler=None, cuda=False):
     loader_order = ['u.pt', 'd.pt', 's.pt']
+    er = args.effective_ratio
     # save model
     if args.save_model:
         if not os.path.exists(args.save_directory):
@@ -49,7 +50,7 @@ def train(args, train_loader, valid_loader, model, criterion, optimizer, device,
     # load checkpoint
     if args.checkpoint != '':
         for i in range(len(model)):
-            checkpoint = torch.load('{}/{}'.format(args.checkpoint, loader_order[i]))
+            checkpoint = torch.load('{}/{}'.format(args.checkpoint, loader_order[i]), map_location={'cuda:0': 'cuda' if cuda else 'cpu'})
             model[i].load_state_dict(checkpoint['model_state_dict'])
             optimizer[i].load_state_dict(checkpoint['optimizer_state_dict'])
             print('Training from checkpoint: %s/%s' % (args.checkpoint, loader_order[i]))
@@ -88,18 +89,18 @@ def train(args, train_loader, valid_loader, model, criterion, optimizer, device,
             #l1_list = [[l1[:l] for l in range(l1.shape[1])] for l1 in l1_result]
 
             # do net 1 BP automatically
-            loss1 = pts_criterion((l1_result[0][1]+l1_result[2][1][:, :16])/2, l1_result[0][0])
+            loss1 = pts_criterion((l1_result[0][1]*(1-er) + l1_result[2][1][:, :16]*er), l1_result[0][0])
             loss1.backward(retain_graph=True)
             optimizer[0].step()
 
             # do net 2 BP automatically
-            loss2 = pts_criterion((l1_result[1][1] + l1_result[2][1][:, 12:]) / 2, l1_result[1][0])
+            loss2 = pts_criterion((l1_result[1][1]*(1-er) + l1_result[2][1][:, 12:]*er), l1_result[1][0])
             loss2.backward(retain_graph=True)
             optimizer[1].step()
 
-            l1_result[2][1][:, :12] = (l1_result[2][1][:, :12]+l1_result[0][1][:, :12])/2
-            l1_result[2][1][:, 12:16] = (l1_result[2][1][:, 12:16]+l1_result[0][1][:, 12:16]+l1_result[1][1][:, :4])/3
-            l1_result[2][1][:, 16:] = (l1_result[2][1][:, 16:]+l1_result[1][1][:, 4:])/2
+            l1_result[2][1][:, :12] = (l1_result[2][1][:, :12]*(1-er)+l1_result[0][1][:, :12]*er)
+            l1_result[2][1][:, 12:16] = (l1_result[2][1][:, 12:16]*(1-2*er)+l1_result[0][1][:, 12:16]*er+l1_result[1][1][:, :4]*er)
+            l1_result[2][1][:, 16:] = (l1_result[2][1][:, 16:]*(1-er)+l1_result[1][1][:, 4:]*er)
             # do net 2 BP automatically
             loss3 = pts_criterion(l1_result[2][1], l1_result[2][0])
             loss3.backward()
@@ -120,7 +121,8 @@ def train(args, train_loader, valid_loader, model, criterion, optimizer, device,
 
 
         if scheduler:  # Finetune with learning rate scheduler
-            scheduler.step()
+            for sch in scheduler:
+                sch.step()
         elapsed = time.perf_counter() - start
         print("Trained elapsed: %.5f" % elapsed)
         time_elapse1.append(elapsed)
@@ -149,22 +151,22 @@ def train(args, train_loader, valid_loader, model, criterion, optimizer, device,
                     subtest(valid_img, device, landmarkd, model[2], pts_criterion)
                 ]
                 # net 1
-                loss1 = pts_criterion((l1_result[0][1] + l1_result[2][1][:, :16]) / 2, l1_result[0][0])
+                loss1 = pts_criterion((l1_result[0][1]*(1-er) + l1_result[2][1][:, :16]*er), l1_result[0][0])
 
                 # net 2
-                loss2 = pts_criterion((l1_result[1][1] + l1_result[2][1][:, 12:]) / 2, l1_result[1][0])
+                loss2 = pts_criterion((l1_result[1][1]*(1-er) + l1_result[2][1][:, 12:]*er), l1_result[1][0])
 
                 # net 3
-                l1_result[2][1][:, :12] = (l1_result[2][1][:, :12] + l1_result[0][1][:, :12]) / 2
-                l1_result[2][1][:, 12:16] = (l1_result[2][1][:, 12:16] + l1_result[0][1][:, 12:16] + l1_result[1][1][:, :4]) / 3
-                l1_result[2][1][:, 16:] = (l1_result[2][1][:, 16:] + l1_result[1][1][:, 4:]) / 2
+                l1_result[2][1][:, :12] = (l1_result[2][1][:, :12] * (1-er) + l1_result[0][1][:, :12] * er)
+                l1_result[2][1][:, 12:16] = (l1_result[2][1][:, 12:16] * (1-2*er) + l1_result[0][1][:, 12:16] * er + l1_result[1][1][:, :4] * er)
+                l1_result[2][1][:, 16:] = (l1_result[2][1][:, 16:] * (1-er) + l1_result[1][1][:, 4:] * er)
                 loss3 = pts_criterion(l1_result[2][1], l1_result[2][0])
 
 
                 mean_loss1 += loss1
                 mean_loss2 += loss2
                 mean_loss3 += loss3
-            l1_valid_mean_pts_loss = [i/valid_batch_cnt*1.0 for i in (mean_loss1, mean_loss2, mean_loss3)]
+            l1_valid_mean_pts_loss = [float(i/valid_batch_cnt*1.0) for i in (mean_loss1, mean_loss2, mean_loss3)]
             print('Valid L1: pts_loss:', l1_valid_mean_pts_loss)
 
             l1_valid_losses.append(l1_valid_mean_pts_loss)
@@ -182,7 +184,7 @@ def train(args, train_loader, valid_loader, model, criterion, optimizer, device,
                 torch.save({'model_state_dict': model[i].state_dict(),
                             'optimizer_state_dict': optimizer[i].state_dict()
                             }, saved_model_name)
-    return l1_train_losses, l2_valid_losses, l1_valid_losses, l2_valid_losses
+    return l1_train_losses, l1_valid_losses
 
 
 def main_test():
@@ -219,14 +221,20 @@ def main_test():
                         help='DefaultNet, ResNet***[18,34,50,101,152], MobileNet or GoogLeNet')
     parser.add_argument('--roi', type=float, default=0.25,
                         help='expand original face grid by ratio')
-    parser.add_argument('--angle', type=float, default=30,
-                        help='max (30) angle range to rotate original image on both side')
+    parser.add_argument('--angle', type=float, default=10,
+                        help='max (10) angle range to rotate original image on both side')
     parser.add_argument('--num-class', type=int, default=42,
                         help='default number of class 42')
     parser.add_argument('--scheduler', type=str, default='',
                         help='scheduler selection for fine tune phrase')
     parser.add_argument('--loss', type=str, default='L2',
                         help='loss function')
+    parser.add_argument('--finetune-model', type=int, default=0,
+                        help='select 1 model to finetune')
+    parser.add_argument('--effective-ratio', type=float, default=0.2,
+                        help='Given the effiective ratio of the three model')
+    parser.add_argument('--layer-lockdown', type=str, default='0:14',
+                        help='Freeze the specific layer')
     args = parser.parse_args()
     print(args)
     ###################################################################################
@@ -243,12 +251,6 @@ def main_test():
     ####################################################################
     print('===> Building Model')
     model = []
-    '''if args.net == 'ResNet152' or args.net == 'resnet152':
-        model = resnet152()
-        in_features = model.fc.in_features
-        model.fc = nn.Linear(in_features, pts_len)
-        model = model.to(device)
-    '''
     model.append(Net(num_classes=16).to(device))
     model.append(Net(num_classes=9).to(device))
     model.append(Net(num_classes=21).to(device))
@@ -260,6 +262,15 @@ def main_test():
     else:
         criterion_pts = nn.MSELoss()
     ####################################################################
+    if args.phase == 'Finetune':
+        start, end = (args.layer_lockdown.split(':'))
+        for m in range(len(model)):
+            if m == args.finetune_model:
+                for param in list(model[m].parameters())[start:end]:
+                    param.requires_grad = False
+            else:
+                for param in list(model[m].parameters()):
+                    param.requires_grad = False
     if args.alg == 'SGD':
         optimizer = [optim.SGD(m.parameters(), lr=args.lr, momentum=args.momentum) for m in model]
     elif args.alg == 'adam' or args.alg == 'Adam':
@@ -267,15 +278,18 @@ def main_test():
     else:
         optimizer = [optim.Adam(m.parameters(), lr=args.lr) for m in model]
     ####################################################################
+    if args.scheduler == 'StepLR100':
+        scheduler = [torch.optim.lr_scheduler.StepLR(o, step_size=100) for o in optimizer]
+    else:
+        scheduler = None
+    ####################################################################
     if args.phase == 'Train' or args.phase == 'train':
         print('===> Start Training')
-        l1_train_losses, l2_train_losses, l1_valid_losses, l2_valid_losses = \
-            train(args, train_loader, valid_loader, model, criterion_pts, optimizer, device)
+        l1_train_losses, l1_valid_losses= \
+            train(args, train_loader, valid_loader, model, criterion_pts, optimizer, device, cuda=use_cuda)
         with open(args.save_directory + 'train_result.txt', 'w+') as f:
             f.write(' '.join(l1_train_losses) + '\n')
-            f.write(' '.join(l2_train_losses) + '\n')
             f.write(' '.join(l1_valid_losses) + '\n')
-            f.write(' '.join(l2_valid_losses) + '\n')
         print('====================================================')
     elif args.phase == 'Test' or args.phase == 'test':
         print('===> Test')
@@ -283,17 +297,11 @@ def main_test():
         print('====================================================')
     elif args.phase == 'Finetune' or args.phase == 'finetune':
         print('===> Finetune')
-        if args.scheduler == 'StepLR100':
-            scheduler = [torch.optim.lr_scheduler.StepLR(o, step_size=25) for o in optimizer]
-        else:
-            scheduler = None
-        l1_train_losses, l2_train_losses, l1_valid_losses, l2_valid_losses = \
-            train(args, train_loader, valid_loader, model, criterion_pts, optimizer, device, scheduler=scheduler)
+        l1_train_losses, l1_valid_losses= \
+            train(args, train_loader, valid_loader, model, criterion_pts, optimizer, device, scheduler=scheduler, cuda=use_cuda)
         with open(args.save_directory + 'train_result.txt', 'w+') as f:
             f.write(' '.join(l1_train_losses) + '\n')
-            f.write(' '.join(l2_train_losses) + '\n')
             f.write(' '.join(l1_valid_losses) + '\n')
-            f.write(' '.join(l2_valid_losses) + '\n')
         print('====================================================')
     elif args.phase == 'Predict' or args.phase == 'predict':
         print('===> Predict')

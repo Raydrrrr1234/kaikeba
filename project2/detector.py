@@ -13,7 +13,7 @@ import os
 import cv2
 
 from data import get_train_test_set
-from predict import predict
+from myPredict import predict
 
 torch.set_default_tensor_type(torch.FloatTensor)
 

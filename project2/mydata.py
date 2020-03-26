@@ -114,8 +114,8 @@ class RandomRotate(object):
 
     def __call__(self, sample):
         image, landmarks, net, angle = sample['image'], sample['landmarks'], sample['net'], sample['angle']
-        a0 = random.random() * min(angle, 30) - 15
-        a1, a2 = angle, angle * math.pi / 180
+        a0 = (random.random()-0.5) * min(angle, 10)
+        a1, a2 = a0, a0 * math.pi / 180
         ox, oy = image.width // 2, image.height // 2
         image = image.rotate(-a1, Image.BILINEAR, expand=0)
         cur = [[ox + math.cos(a2) * (i - ox) - math.sin(a2) * (j - oy),
@@ -139,9 +139,9 @@ class RandomFlip(object):
             image = image.transpose(Image.FLIP_LEFT_RIGHT)
             landmarks = np.array(
                 [landmarks[i] if i % 2 == 1 else image.width - landmarks[i] for i in range(len(landmarks))])
-        if random.random() < 0.5:
+        '''if random.random() < 0.5:
             image = image.transpose(Image.FLIP_TOP_BOTTOM)
-            landmarks = np.array([landmarks[i] if i % 2 == 0 else image.height-landmarks[i] for i in range(len(landmarks))])
+            landmarks = np.array([landmarks[i] if i % 2 == 0 else image.height-landmarks[i] for i in range(len(landmarks))])'''
         return {'image': image,
                 'landmarks': landmarks,
                 'net': net,
@@ -202,9 +202,9 @@ class RandomErasing(object):
         Erased Image.
     # Examples:
         >>> transform = transforms.Compose([
+        >>> transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
         >>> transforms.RandomHorizontalFlip(),
         >>> transforms.ToTensor(),
-        >>> transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
         >>> transforms.RandomErasing(),
         >>> ])
     """
@@ -337,7 +337,7 @@ def load_data(phase, net, roi, angle):
             RandomRotate(),
             Normalize(),  # do channel normalization
             ToTensor(),   # convert to torch type: NxCxHxW
-            RandomErasing(),
+            RandomErasing(p=0.3),
             RandomNoise()
         ]
         )
