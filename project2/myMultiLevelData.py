@@ -56,6 +56,16 @@ def channel_norm(img):
 
 
 def warp(orig_shape, landmarks, width=112, height=112):
+    """ 根据脸框缩放到width、height图片以后所有的关键点对应变换
+        Args:
+             orig_shape: 原来的形状
+             landmarks: 一维图片关键点 (x1, y1, x2, y2, ..., x21, y21)
+             width: 目标宽度
+             height: 目标高度
+
+        Returns:
+            一维变换后的点坐标
+    """
     pts = [[max(0, i), max(0, j)] for (i, j) in zip(landmarks[::2], landmarks[1::2])]
     orig_h, orig_w = orig_shape[:2]
     o = np.float32([[0, 0], [orig_w, 0], [0, orig_h], [orig_w, orig_h]])
@@ -67,6 +77,12 @@ def warp(orig_shape, landmarks, width=112, height=112):
 
 # 按行读取数据为 img_name, rect, landmarks
 def my_parse_line(line):
+    """ 按行读取数据
+        Args:
+             line: train.txt/test.txt的一行输入，用于解读图片、人脸框和关键点
+        Returns:
+            img_name, rect, landmarks
+    """
     line_parts = line.strip().split()
     img_name = line_parts[0]
     rect = list(map(int, list(map(float, line_parts[1:5]))))
@@ -76,6 +92,16 @@ def my_parse_line(line):
 
 # 按照ratio扩脸选框
 def my_expand_roi(rect, img_width, img_height, ratio=0.25):
+    """ 扩大固定倍数的人脸框
+        Args:
+             rect: 原始框
+             img_width: 图片宽度
+             img_height: 图片高度
+             ratio: 扩大比例
+
+        Returns:
+            扩展后的人脸框
+    """
     if rect[0] > rect[2] and rect[1] > rect[3]:
         return my_expand_roi([rect[2:], rect[:2]], img_height, img_height, ratio=ratio)
     width = int((rect[2] - rect[0]) * ratio)
@@ -130,7 +156,7 @@ class RandomRotate(object):
 
 class RandomFlip(object):
     """
-        Randomly flip left and right
+        随机产生噪点
     """
     def __call__(self, sample):
         image, landmarks, net, angle = sample['image'], sample['landmarks'], sample['net'], sample['angle']
@@ -292,18 +318,6 @@ class RandomErasing(object):
                 'net': net}
 
 
-
-def my_enlargement(img, rect, landmarks):
-    angle = random.randint(0, 360)
-    M = cv2.getRotationMatrix2D((0, 0), angle, 1)
-    dst = cv2.warpAffine(img, M, img.shape[:2])
-    rps = [[[max(0, i), max(0, j)] for (i, j) in zip(rect[::2], rect[1::2])]]
-    lps = [[max(0, i), max(0, j)] for (i, j) in zip(landmarks[::2], landmarks[1::2])]
-    w_rps = cv2.perspectiveTransform(np.float32([rps]), M)
-    w_lps = cv2.perspectiveTransform(np.float32([lps]), M)
-    return dst, w_rps.flatten(), w_lps.flatten()
-
-
 class FaceLandmarksDataset(Dataset):
     # Face Landmarks Dataset
     def __init__(self, src_lines, phase, net, roi, angle, transform=None):
@@ -331,6 +345,7 @@ class FaceLandmarksDataset(Dataset):
             img = Image.open(img_name).convert('RGB')
         rect = my_expand_roi(rect, img.width, img.height, ratio=self.roi + random.random() * 0.1)
         img_crop = img.crop(tuple(rect))
+        # 任务一步骤 C
         landmarks = np.float32([
             landmarks[i] - rect[0] if i % 2 == 0
             else landmarks[i] - rect[1]
@@ -343,8 +358,6 @@ class FaceLandmarksDataset(Dataset):
             sample['rect'] = rect
         return sample
 
-    def p1(self, landmarks):
-        return
 
 def load_data(phase, net, roi, angle):
     data_file = phase + '.txt'
