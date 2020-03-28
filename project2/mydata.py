@@ -326,7 +326,7 @@ def load_data(phase, net, roi, angle):
             RandomRotate(),
             Normalize(),  # do channel normalization
             ToTensor(),   # convert to torch type: NxCxHxW
-            RandomErasing(p=0.3),
+            RandomErasing(p=0.03),
             RandomNoise()
         ]
         )

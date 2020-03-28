@@ -6,8 +6,8 @@ from torch import nn
 import torch.optim as optim
 
 from myDataS3 import get_train_test_set_w_err
-from myNNS3 import Net
-from myPredictS3 import predict, test
+from myNN import Net, resnet18, resnet34, resnet50, resnet101, resnet152, GoogLeNet
+from myPredictS3_updated import predict, test
 from myFPN import FPN101
 import torch.nn.functional as F
 
@@ -23,13 +23,15 @@ except ModuleNotFoundError:
 torch.set_default_tensor_type(torch.FloatTensor)
 
 
-def train(args, train_loader, valid_loader, model, criterion1, criterion2, optimizer, device, scheduler=None, cuda=False):
+def train(args, train_loader, valid_loader, model1, model2, criterion1, criterion2, optimizer1, optimizer2, device,
+          scheduler=None, cuda=False):
     # save model
     if args.save_model:
         if not os.path.exists(args.save_directory):
             os.makedirs(args.save_directory)
     if args.checkpoint != '':
-        model.load_state_dict(torch.load(args.checkpoint, map_location={'cuda:0': 'cuda' if cuda else 'cpu'}))
+        model1.load_state_dict(torch.load(args.checkpoint+'/1.pt', map_location={'cuda:0': 'cuda' if cuda else 'cpu'}))
+        model2.load_state_dict(torch.load(args.checkpoint+'/2.pt', map_location={'cuda:0': 'cuda' if cuda else 'cpu'}))
         print('Training from checkpoint: %s' % args.checkpoint)
 
     epoch = args.epochs
@@ -46,7 +48,8 @@ def train(args, train_loader, valid_loader, model, criterion1, criterion2, optim
         ######################
         # training the model #
         ######################
-        model.train()
+        model1.train()
+        model2.train()
         start = time.perf_counter()
         for batch_idx, batch in enumerate(train_loader):
             img = batch['image']
@@ -56,10 +59,11 @@ def train(args, train_loader, valid_loader, model, criterion1, criterion2, optim
             input_img = img.to(device)
 
             # clear the gradients of all optimized variables
-            optimizer.zero_grad()
+            optimizer1.zero_grad()
+            optimizer2.zero_grad()
 
             # get output
-            output_m1, output_m2 = model(input_img)
+            output_m1 = model1(input_img)
 
             target_face = torch.FloatTensor([[1, 0] if i else [0, 1] for i in batch['face']]).to(device)
             output_face = F.softmax(output_m1, dim=1).to(device)
@@ -68,10 +72,13 @@ def train(args, train_loader, valid_loader, model, criterion1, criterion2, optim
             loss1 = criterion1(output_face, target_face)
 
             # construct new dataset for face key point output
-            output_m2 = torch.index_select(output_m2, 0, torch.tensor(
-                [1 for i in range(batch['face'].shape[0]) if batch['face'][i]]).to(device))
+            input_img = torch.index_select(input_img, 0, torch.tensor(
+                [1 for i in range(batch['face'].shape[0]).to(device) if batch['face'][i]]))
             target_pts = torch.index_select(landmark, 0, torch.tensor(
-                [1 for i in range(batch['face'].shape[0]) if batch['face'][i]]).to(device))
+                [1 for i in range(batch['face'].shape[0]).to(device) if batch['face'][i]]))
+
+            # compute the second grad
+            output_m2 = model2(input_img)
 
             # calculate loss
             loss2 = criterion2(output_m2, target_pts)
@@ -81,7 +88,8 @@ def train(args, train_loader, valid_loader, model, criterion1, criterion2, optim
 
             # do BP automatically
             loss.backward()
-            optimizer.step()
+            optimizer1.step()
+            optimizer2.step()
 
             # show log info
             if batch_idx % args.log_interval == 0:
@@ -107,7 +115,8 @@ def train(args, train_loader, valid_loader, model, criterion1, criterion2, optim
         ######################
         valid_mean_pts_loss = 0.0
 
-        model.eval()  # prep model for evaluation
+        model1.eval()  # prep model for evaluation
+        model2.eval()
         start = time.perf_counter()
         with torch.no_grad():
             valid_batch_cnt = 0
@@ -119,8 +128,7 @@ def train(args, train_loader, valid_loader, model, criterion1, criterion2, optim
 
                 input_img = valid_img.to(device)
 
-                # get output
-                output_m1, output_m2 = model(input_img)
+                output_m1 = model1(input_img)
 
                 target_face = torch.FloatTensor([[1, 0] if i else [0, 1] for i in batch['face']]).to(device)
                 output_face = F.softmax(output_m1, dim=1).to(device)
@@ -129,10 +137,13 @@ def train(args, train_loader, valid_loader, model, criterion1, criterion2, optim
                 loss1 = criterion1(output_face, target_face)
 
                 # construct new dataset for face key point output
-                output_m2 = torch.index_select(output_m2, 0, torch.tensor(
+                input_img = torch.index_select(input_img, 0, torch.tensor(
                     [1 for i in range(batch['face'].shape[0]) if batch['face'][i]]).to(device))
                 target_pts = torch.index_select(landmark, 0, torch.tensor(
                     [1 for i in range(batch['face'].shape[0]) if batch['face'][i]]).to(device))
+
+                # compute the second grad
+                output_m2 = model2(input_img)
 
                 # calculate loss
                 loss2 = criterion2(output_m2, target_pts)
@@ -166,8 +177,13 @@ def train(args, train_loader, valid_loader, model, criterion1, criterion2, optim
         time_elapse2.append(elapsed)
         # save model
         if args.save_model and epoch_id % args.save_interval == 0:
-            saved_model_name = os.path.join(args.save_directory, 'detector_epoch' + '_' + str(epoch_id) + '.pt')
-            torch.save(model.state_dict(), saved_model_name)
+            directory = os.path.join(args.save_directory, 'detector_epoch' + '_' + str(epoch_id))
+            if not os.path.exists(directory):
+                os.makedirs(directory)
+            saved_model_name1 = os.path.join(directory, '1.pt')
+            torch.save(model1.state_dict(), saved_model_name1)
+            saved_model_name2 = os.path.join(directory, '2.pt')
+            torch.save(model2.state_dict(), saved_model_name2)
     return train_losses, valid_losses, time_elapse1, time_elapse1
 
 
@@ -181,7 +197,9 @@ def main_test():
                         help='number of epochs to train (default: 100)')
     parser.add_argument('--lr', type=float, default=0.001, metavar='LR',
                         help='learning rate (default: 0.001)')
-    parser.add_argument('--alg', type=str, default='adam',
+    parser.add_argument('--alg1', type=str, default='adam',
+                        help='select optimzer SGD, adam, or other')
+    parser.add_argument('--alg2', type=str, default='adam',
                         help='select optimzer SGD, adam, or other')
     parser.add_argument('--momentum', type=float, default=0.5, metavar='M',
                         help='momentum (default: 0.5)')
@@ -236,7 +254,51 @@ def main_test():
     valid_loader = torch.utils.data.DataLoader(test_set, batch_size=args.test_batch_size)
     ####################################################################
     print('===> Building Model')
-    model = Net(args.use_bn).to(device)
+    pts_len = 42
+    if args.use_tpu:
+        # TPU device is only an experiment on ResNet101
+        model = resnet101()
+        in_features = model.fc.in_features
+        model.fc = nn.Linear(in_features, pts_len)
+        model = model.to(device)
+    else:
+        # For single GPU
+        if args.net == 'ResNet18' or args.net == 'resnet18':
+            model = resnet18()
+            in_features = model.fc.in_features
+            model.fc = nn.Linear(in_features, pts_len)
+            model = model.to(device)
+        elif args.net == 'ResNet34' or args.net == 'resnet34':
+            model = resnet34()
+            in_features = model.fc.in_features
+            model.fc = nn.Linear(in_features, pts_len)
+            model = model.to(device)
+        elif args.net == 'ResNet50' or args.net == 'resnet50':
+            model = resnet50()
+            in_features = model.fc.in_features
+            model.fc = nn.Linear(in_features, pts_len)
+            model = model.to(device)
+        elif args.net == 'ResNet101' or args.net == 'resnet101':
+            model = resnet101()
+            in_features = model.fc.in_features
+            model.fc = nn.Linear(in_features, pts_len)
+            model = model.to(device)
+        elif args.net == 'ResNet152' or args.net == 'resnet152':
+            model = resnet152()
+            in_features = model.fc.in_features
+            model.fc = nn.Linear(in_features, pts_len)
+            model = model.to(device)
+        elif args.net == 'GoogLeNet' or args.net == 'googlenet':
+            model = GoogLeNet(num_classes=pts_len).to(device)
+        elif args.net == 'FPN':
+            model = FPN101(args.batch_size).to(device)
+        else:
+            model = Net(args.use_bn).to(device)
+    # Additional model for face detect
+    model_det = Net(args.use_bn)
+    in_features = model.ip3.in_features
+    model_det.ip3 = nn.Linear(in_features, 2)
+    model_det = model_det.to(device)
     ####################################################################
     if args.loss1 == 'L2':
         criterion_pts1 = nn.MSELoss()
@@ -256,10 +318,14 @@ def main_test():
         start, end = (args.layer_lockdown.split(':'))
         for param in list(model.parameters())[start:end]:
             param.requires_grad = False
-    if args.alg == 'SGD':
-        optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
-    elif args.alg == 'adam' or args.alg == 'Adam':
-        optimizer = optim.Adam(model.parameters(), lr=args.lr)
+    if args.alg1 == 'SGD':
+        optimizer1 = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
+    elif args.alg1 == 'adam' or args.alg1 == 'Adam':
+        optimizer1 = optim.Adam(model.parameters(), lr=args.lr)
+    if args.alg2 == 'SGD':
+        optimizer2 = optim.SGD(model_det.parameters(), lr=args.lr, momentum=args.momentum)
+    elif args.alg2 == 'adam' or args.alg2 == 'Adam':
+        optimizer2 = optim.Adam(model_det.parameters(), lr=args.lr)
     ####################################################################
     # Add scheduler
     if args.scheduler == '':
@@ -270,8 +336,8 @@ def main_test():
     if args.phase == 'Train' or args.phase == 'train':
         print('===> Start Training')
         train_losses, valid_losses, time_elapse1, time_elapse2 = \
-            train(args, train_loader, valid_loader, model, criterion_pts1, criterion_pts2, optimizer,
-                device, scheduler=scheduler, cuda=use_cuda)
+            train(args, train_loader, valid_loader, model_det, model, criterion_pts1, criterion_pts2, optimizer1,
+                  optimizer2, device, scheduler=scheduler, cuda=use_cuda)
         with open(args.save_directory + 'train_result.txt', 'w+') as f:
             f.write(' '.join([str(i) for i in train_losses]) + '\n')
             f.write(' '.join([str(i) for i in valid_losses]) + '\n')
@@ -280,13 +346,13 @@ def main_test():
         print('====================================================')
     elif args.phase == 'Test' or args.phase == 'test':
         print('===> Test')
-        test(args, model, valid_loader, device, criterion_pts2, output_file='output.txt', cuda=use_cuda)
+        test(args, model_det, model, valid_loader, device, output_file='output.txt', cuda=use_cuda)
         print('====================================================')
     elif args.phase == 'Finetune' or args.phase == 'finetune':
         print('===> Finetune')
         train_losses, valid_losses, time_elapse1, time_elapse2 = \
-            train(args, train_loader, valid_loader, model, criterion_pts1, criterion_pts2, optimizer,
-                device, scheduler=scheduler, cuda=use_cuda)
+            train(args, train_loader, valid_loader, model_det, model, criterion_pts1, criterion_pts2, optimizer1,
+                  optimizer2, device, scheduler=scheduler, cuda=use_cuda)
         with open(args.save_directory + 'train_result.txt', 'w+') as f:
             f.write(' '.join([str(i) for i in train_losses]) + '\n')
             f.write(' '.join([str(i) for i in valid_losses]) + '\n')
@@ -295,7 +361,7 @@ def main_test():
         print('====================================================')
     elif args.phase == 'Predict' or args.phase == 'predict':
         print('===> Predict')
-        predict(args, model, valid_loader, device, criterion_pts2, cuda=use_cuda)
+        predict(args, model_det, model, valid_loader, device, criterion_pts2, cuda=use_cuda)
         print('====================================================')
 
 
