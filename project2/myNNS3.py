@@ -26,9 +26,14 @@ class Net(nn.Module):
         self.conv4_1 = nn.Conv2d(24, 40, 3, 1, 1)
         # points branch
         self.conv4_2 = nn.Conv2d(40, 80, 3, 1, 1)
+        # Stage 3
+        self.conv_cls4_2 = nn.Conv2d(40, 40, 3, 1, 1)
         self.ip1 = nn.Linear(4 * 4 * 80, 128)
+        self.ip_cls1 = nn.Linear(4 * 4 * 40, 128)
         self.ip2 = nn.Linear(128, 128)
+        self.ip_cls2 = nn.Linear(128, 128)
         self.ip3 = nn.Linear(128, 42)
+        self.ip_cls3 = nn.Linear(128, 2)
         # common used
         self.prelu1_1 = nn.PReLU()
         self.prelu2_1 = nn.PReLU()
@@ -37,8 +42,11 @@ class Net(nn.Module):
         self.prelu3_2 = nn.PReLU()
         self.prelu4_1 = nn.PReLU()
         self.prelu4_2 = nn.PReLU()
+        self.prelu4_2_cls = nn.PReLU()
         self.preluip1 = nn.PReLU()
+        self.preluip1_cls = nn.PReLU()
         self.preluip2 = nn.PReLU()
+        self.preluip2_cls = nn.PReLU()
         self.ave_pool = nn.AvgPool2d(2, 2, ceil_mode=True)
 
     def forward(self, x):
@@ -71,14 +79,19 @@ class Net(nn.Module):
 
         # points branch
         ip3 = self.prelu4_2(self.conv4_2(x))
+        ip3_cls = self.prelu4_2_cls(self.conv_cls4_2(x))
         # print('pts: ip3 after conv4_2 and pool shape should be nx80x4x4: ', ip3.shape)
         ip3 = ip3.view(-1, 4 * 4 * 80)
+        ip3_cls = ip3_cls.view(-1, 4 * 4 * 40)
         # print('ip3 flatten shape should be nx1280: ', ip3.shape)
         ip3 = self.preluip1(self.ip1(ip3))
+        ip3_cls = self.preluip1_cls(self.ip_cls1(ip3_cls))
         # print('ip3 after ip1 shape should be nx128: ', ip3.shape)
         ip3 = self.preluip2(self.ip2(ip3))
+        ip3_cls = self.preluip2_cls(self.ip_cls2(ip3_cls))
         # print('ip3 after ip2 shape should be nx128: ', ip3.shape)
         ip3 = self.ip3(ip3)
+        ip3_cls = self.ip_cls3(ip3_cls)
         # print('ip3 after ip3 shape should be nx42: ', ip3.shape)
 
-        return ip3
+        return ip3_cls, ip3
